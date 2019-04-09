@@ -1,30 +1,27 @@
 # Webhooks for external integrations.
-from __future__ import absolute_import
-from typing import Any, Dict, List, Optional, Text, Tuple
+import re
+from typing import Any, Dict, List, Optional
 
-from django.utils.translation import ugettext as _
 from django.db.models import Q
-from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 
-from zerver.models import UserProfile, get_user_profile_by_email, Realm
-from zerver.lib.actions import check_send_message
-from zerver.lib.response import json_success, json_error
-from zerver.decorator import api_key_only_webhook_view, has_request_variables, REQ
-
-import logging
-import re
-import ujson
-
+from zerver.decorator import api_key_only_webhook_view
+from zerver.lib.request import REQ, has_request_variables
+from zerver.lib.response import json_success
+from zerver.lib.webhooks.common import check_send_webhook_message, \
+    UnexpectedWebhookEventType
+from zerver.models import Realm, UserProfile, get_user_by_delivery_email
 
 IGNORED_EVENTS = [
-    'comment_created',  # we handle issue_update event instead
-    'comment_updated',  # we handle issue_update event instead
     'comment_deleted',  # we handle issue_update event instead
+    'issuelink_created',
+    'comment_updated',
+    'attachment_created',
+    'issuelink_deleted',
+    'sprint_started',
 ]
 
-def guess_zulip_user_from_jira(jira_username, realm):
-    # type: (Text, Realm) -> Optional[UserProfile]
+def guess_zulip_user_from_jira(jira_username: str, realm: Realm) -> Optional[UserProfile]:
     try:
         # Try to find a matching user in Zulip
         # We search a user's full name, short name,
@@ -39,8 +36,7 @@ def guess_zulip_user_from_jira(jira_username, realm):
     except IndexError:
         return None
 
-def convert_jira_markup(content, realm):
-    # type: (Text, Realm) -> Text
+def convert_jira_markup(content: str, realm: Realm) -> str:
     # Attempt to do some simplistic conversion of JIRA
     # formatting to Markdown, for consumption in Zulip
 
@@ -78,7 +74,7 @@ def convert_jira_markup(content, realm):
     # Zulip user mention. We don't know the email, just the JIRA username,
     # so we naively guess at their Zulip account using this
     if realm:
-        mention_re = re.compile(u'\[~(.*?)\]')
+        mention_re = re.compile(u'\\[~(.*?)\\]')
         for username in mention_re.findall(content):
             # Try to look up username
             user_profile = guess_zulip_user_from_jira(username, realm)
@@ -91,8 +87,7 @@ def convert_jira_markup(content, realm):
 
     return content
 
-def get_in(payload, keys, default=''):
-    # type: (Dict[str, Any], List[str], Text) -> Any
+def get_in(payload: Dict[str, Any], keys: List[str], default: str='') -> Any:
     try:
         for key in keys:
             payload = payload[key]
@@ -100,48 +95,41 @@ def get_in(payload, keys, default=''):
         return default
     return payload
 
-def get_issue_string(payload, issue_id=None):
-    # type: (Dict[str, Any], Text) -> Text
+def get_issue_string(payload: Dict[str, Any], issue_id: Optional[str]=None) -> str:
     # Guess the URL as it is not specified in the payload
     # We assume that there is a /browse/BUG-### page
     # from the REST url of the issue itself
     if issue_id is None:
         issue_id = get_issue_id(payload)
 
-    base_url = re.match("(.*)\/rest\/api/.*", get_in(payload, ['issue', 'self']))
+    base_url = re.match(r"(.*)\/rest\/api/.*", get_in(payload, ['issue', 'self']))
     if base_url and len(base_url.groups()):
         return u"[{}]({}/browse/{})".format(issue_id, base_url.group(1), issue_id)
     else:
         return issue_id
 
-def get_assignee_mention(assignee_email):
-    # type: (Text) -> Text
+def get_assignee_mention(assignee_email: str, realm: Realm) -> str:
     if assignee_email != '':
         try:
-            assignee_name = get_user_profile_by_email(assignee_email).full_name
+            assignee_name = get_user_by_delivery_email(assignee_email, realm).full_name
         except UserProfile.DoesNotExist:
             assignee_name = assignee_email
         return u"**{}**".format(assignee_name)
     return ''
 
-def get_issue_author(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_issue_author(payload: Dict[str, Any]) -> str:
     return get_in(payload, ['user', 'displayName'])
 
-def get_issue_id(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_issue_id(payload: Dict[str, Any]) -> str:
     return get_in(payload, ['issue', 'key'])
 
-def get_issue_title(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_issue_title(payload: Dict[str, Any]) -> str:
     return get_in(payload, ['issue', 'fields', 'summary'])
 
-def get_issue_subject(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_issue_subject(payload: Dict[str, Any]) -> str:
     return u"{}: {}".format(get_issue_id(payload), get_issue_title(payload))
 
-def get_sub_event_for_update_issue(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_sub_event_for_update_issue(payload: Dict[str, Any]) -> str:
     sub_event = payload.get('issue_event_type_name', '')
     if sub_event == '':
         if payload.get('comment'):
@@ -150,15 +138,13 @@ def get_sub_event_for_update_issue(payload):
             return 'issue_transited'
     return sub_event
 
-def get_event_type(payload):
-    # type: (Dict[str, Any]) -> Text
+def get_event_type(payload: Dict[str, Any]) -> Optional[str]:
     event = payload.get('webhookEvent')
     if event is None and payload.get('transition'):
         event = 'jira:issue_updated'
     return event
 
-def add_change_info(content, field, from_field, to_field):
-    # type: (Text, Text, Text, Text) -> Text
+def add_change_info(content: str, field: str, from_field: str, to_field: str) -> str:
     content += u"* Changed {}".format(field)
     if from_field:
         content += u" from **{}**".format(from_field)
@@ -166,16 +152,15 @@ def add_change_info(content, field, from_field, to_field):
         content += u" to {}\n".format(to_field)
     return content
 
-def handle_updated_issue_event(payload, user_profile):
+def handle_updated_issue_event(payload: Dict[str, Any], user_profile: UserProfile) -> str:
     # Reassigned, commented, reopened, and resolved events are all bundled
     # into this one 'updated' event type, so we try to extract the meaningful
     # event that happened
-    # type: (Dict[str, Any], UserProfile) -> Text
     issue_id = get_in(payload, ['issue', 'key'])
     issue = get_issue_string(payload, issue_id)
 
     assignee_email = get_in(payload, ['issue', 'fields', 'assignee', 'emailAddress'], '')
-    assignee_mention = get_assignee_mention(assignee_email)
+    assignee_mention = get_assignee_mention(assignee_email, user_profile.realm)
 
     if assignee_mention != '':
         assignee_blurb = u" (assigned to {})".format(assignee_mention)
@@ -190,7 +175,13 @@ def handle_updated_issue_event(payload, user_profile):
             verb = 'edited comment on'
         else:
             verb = 'deleted comment from'
-        content = u"{} **{}** {}{}".format(get_issue_author(payload), verb, issue, assignee_blurb)
+
+        if payload.get('webhookEvent') == 'comment_created':
+            author = payload['comment']['author']['displayName']
+        else:
+            author = get_issue_author(payload)
+
+        content = u"{} **{}** {}{}".format(author, verb, issue, assignee_blurb)
         comment = get_in(payload, ['comment', 'body'])
         if comment:
             comment = convert_jira_markup(comment, user_profile.realm)
@@ -223,8 +214,7 @@ def handle_updated_issue_event(payload, user_profile):
 
     return content
 
-def handle_created_issue_event(payload):
-    # type: (Dict[str, Any]) -> Text
+def handle_created_issue_event(payload: Dict[str, Any], user_profile: UserProfile) -> str:
     return u"{} **created** {} priority {}, assigned to **{}**:\n\n> {}".format(
         get_issue_author(payload),
         get_issue_string(payload),
@@ -233,39 +223,36 @@ def handle_created_issue_event(payload):
         get_issue_title(payload)
     )
 
-def handle_deleted_issue_event(payload):
-    # type: (Dict[str, Any]) -> Text
+def handle_deleted_issue_event(payload: Dict[str, Any], user_profile: UserProfile) -> str:
     return u"{} **deleted** {}!".format(get_issue_author(payload), get_issue_string(payload))
+
+JIRA_CONTENT_FUNCTION_MAPPER = {
+    "jira:issue_created": handle_created_issue_event,
+    "jira:issue_deleted": handle_deleted_issue_event,
+    "jira:issue_updated": handle_updated_issue_event,
+    "comment_created": handle_updated_issue_event
+}
 
 @api_key_only_webhook_view("JIRA")
 @has_request_variables
-def api_jira_webhook(request, user_profile,
-                     payload=REQ(argument_type='body'),
-                     stream=REQ(default='jira')):
-    # type: (HttpRequest, UserProfile, Dict[str, Any], Text) -> HttpResponse
+def api_jira_webhook(request: HttpRequest, user_profile: UserProfile,
+                     payload: Dict[str, Any]=REQ(argument_type='body')) -> HttpResponse:
 
     event = get_event_type(payload)
-    if event == 'jira:issue_created':
-        subject = get_issue_subject(payload)
-        content = handle_created_issue_event(payload)
-    elif event == 'jira:issue_deleted':
-        subject = get_issue_subject(payload)
-        content = handle_deleted_issue_event(payload)
-    elif event == 'jira:issue_updated':
-        subject = get_issue_subject(payload)
-        content = handle_updated_issue_event(payload, user_profile)
-    elif event in IGNORED_EVENTS:
-        return json_success()
-    else:
-        if event is None:
-            if not settings.TEST_SUITE:
-                message = u"Got JIRA event with None event type: {}".format(payload)
-                logging.warning(message)
-            return json_error(_("Event is not given by JIRA"))
-        else:
-            if not settings.TEST_SUITE:
-                logging.warning("Got JIRA event type we don't support: {}".format(event))
-            return json_success()
+    subject = get_issue_subject(payload)
 
-    check_send_message(user_profile, request.client, "stream", [stream], subject, content)
+    if event in IGNORED_EVENTS:
+        return json_success()
+
+    if event is not None:
+        content_func = JIRA_CONTENT_FUNCTION_MAPPER.get(event)  # type: Any
+
+    if subject is None or content_func is None:
+        raise UnexpectedWebhookEventType('Jira', event)
+
+    content = content_func(payload, user_profile)  # type: str
+
+    check_send_webhook_message(request, user_profile,
+                               subject, content,
+                               unquote_url_parameters=True)
     return json_success()

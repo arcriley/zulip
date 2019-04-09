@@ -1,24 +1,21 @@
-from __future__ import absolute_import
-from __future__ import print_function
-
-from typing import Any
-
-from argparse import ArgumentParser, RawTextHelpFormatter
-from django.core.management.base import BaseCommand, CommandError
-from django.core.exceptions import ValidationError
 
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
-import ujson
+from argparse import ArgumentParser
+from typing import Any
 
-from zerver.lib.export import (
-    do_export_realm, do_write_stats_file_for_realm_export
-)
-from zerver.models import get_realm
+from django.conf import settings
+from django.core.management.base import CommandError
 
-class Command(BaseCommand):
+from zerver.lib.export import do_export_realm, \
+    do_write_stats_file_for_realm_export
+from zerver.lib.management import ZulipBaseCommand
+from zerver.lib.utils import generate_random_token
+
+class Command(ZulipBaseCommand):
     help = """Exports all data from a Zulip realm
 
     This command exports all significant data from a Zulip realm.  The
@@ -31,13 +28,12 @@ class Command(BaseCommand):
       metadata needed to restore them even in the ab
 
     Things that are not exported:
-    * Confirmation, MitUser, and PreregistrationUser (transient tables)
+    * Confirmation and PreregistrationUser (transient tables)
     * Sessions (everyone will need to login again post-export)
     * Users' passwords and API keys (users will need to use SSO or reset password)
     * Mobile tokens for APNS/GCM (users will need to reconnect their mobile devices)
-    * ScheduledJob (Not relevant on a new server)
-    * Referral (Unused)
-    * Deployment (Unused)
+    * ScheduledEmail (Not relevant on a new server)
+    * RemoteZulipServer (Unlikely to be migrated)
     * third_party_api_results cache (this means rerending all old
       messages could be expensive)
 
@@ -87,17 +83,7 @@ class Command(BaseCommand):
     minutes.  But this will vary a lot depending on the average number
     of recipients of messages in the realm, hardware, etc."""
 
-    # Fix support for multi-line usage
-    def create_parser(self, *args, **kwargs):
-        # type: (*Any, **Any) -> ArgumentParser
-        parser = super(Command, self).create_parser(*args, **kwargs)
-        parser.formatter_class = RawTextHelpFormatter
-        return parser
-
-    def add_arguments(self, parser):
-        # type: (ArgumentParser) -> None
-        parser.add_argument('realm', metavar='<realm>', type=str,
-                            help="realm to export")
+    def add_arguments(self, parser: ArgumentParser) -> None:
         parser.add_argument('--output',
                             dest='output_dir',
                             action="store",
@@ -108,17 +94,23 @@ class Command(BaseCommand):
                             action="store",
                             default=6,
                             help='Threads to use in exporting UserMessage objects in parallel')
+        parser.add_argument('--public-only',
+                            action="store_true",
+                            help='Export only public stream messages and associated attachments')
+        parser.add_argument('--upload-to-s3',
+                            action="store_true",
+                            help="Whether to upload resulting tarball to s3")
+        self.add_realm_args(parser, True)
 
-    def handle(self, *args, **options):
-        # type: (*Any, **Any) -> None
-        try:
-            realm = get_realm(options["realm"])
-        except ValidationError:
-            raise CommandError("No such realm.")
+    def handle(self, *args: Any, **options: Any) -> None:
+        realm = self.get_realm(options)
+        assert realm is not None  # Should be ensured by parser
 
         output_dir = options["output_dir"]
         if output_dir is None:
-            output_dir = tempfile.mkdtemp(prefix="/tmp/zulip-export-")
+            output_dir = tempfile.mkdtemp(prefix="zulip-export-")
+        else:
+            output_dir = os.path.realpath(os.path.expanduser(output_dir))
         if os.path.exists(output_dir):
             shutil.rmtree(output_dir)
         os.makedirs(output_dir)
@@ -127,7 +119,7 @@ class Command(BaseCommand):
         if num_threads < 1:
             raise CommandError('You must have at least one thread.')
 
-        do_export_realm(realm, output_dir, threads=num_threads)
+        do_export_realm(realm, output_dir, threads=num_threads, public_only=options["public_only"])
         print("Finished exporting to %s; tarring" % (output_dir,))
 
         do_write_stats_file_for_realm_export(output_dir)
@@ -136,3 +128,29 @@ class Command(BaseCommand):
         os.chdir(os.path.dirname(output_dir))
         subprocess.check_call(["tar", "-czf", tarball_path, os.path.basename(output_dir)])
         print("Tarball written to %s" % (tarball_path,))
+
+        if not options["upload_to_s3"]:
+            return
+
+        def percent_callback(complete: Any, total: Any) -> None:
+            sys.stdout.write('.')
+            sys.stdout.flush()
+
+        if settings.LOCAL_UPLOADS_DIR is not None:
+            raise CommandError("S3 backend must be configured to upload to S3")
+
+        print("Uploading export tarball to S3")
+
+        from zerver.lib.upload import S3Connection, get_bucket, Key
+        conn = S3Connection(settings.S3_KEY, settings.S3_SECRET_KEY)
+        # We use the avatar bucket, because it's world-readable.
+        bucket = get_bucket(conn, settings.S3_AVATAR_BUCKET)
+        key = Key(bucket)
+        key.key = os.path.join("exports", generate_random_token(32), os.path.basename(tarball_path))
+        key.set_contents_from_filename(tarball_path, cb=percent_callback, num_cb=40)
+
+        public_url = 'https://{bucket}.{host}/{key}'.format(
+            host=conn.server_name(),
+            bucket=bucket.name,
+            key=key.key)
+        print("Uploaded to %s" % (public_url,))

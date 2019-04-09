@@ -1,30 +1,31 @@
 # Add a bot or integration
 
-Bots and integrations are features that are accessible to all members of an organization.
+By default, anyone other than guests can add a bot to a Zulip organization.
+A bot that sends content to or from another product is often called an
+**integration**.
 
-## Add a bot
+Organization administrators can also
+[restrict bot creation](/help/restrict-bot-creation). Any bot that is added
+is visible and available for anyone to use.
 
-{!go-to-the.md!} [Your bots](/#settings/your-bots)
-{!settings.md!}
+## Add a bot or integration
 
-2. On this page, under the **Add a new bot** view, you can enter a name, an email, and
-optionally an avatar for your bot. Then click the **Create bot** button to create your bot.
+{start_tabs}
 
-    ![Bots page](/static/images/help/add_a_new_bot.png)
+{settings_tab|your-bots}
 
-3. An entry such as the following should appear above the **Add a new bot** view, confirming
-the creation of your bot.
+2. Click **Add a new bot**.
 
-    ![Example bot](/static/images/help/bot_example.png)
+3. Fill out the fields, and click **Create bot**.
 
-4. You now have access to your bot's API key and API
-configuration file (`.zuliprc`) which you will need for integrations that you would like
-to use with this bot. You can click on the download
-(<i class="icon-vector-download-alt"></i>) icon to download your `.zuliprc` file.
+!!! warn ""
+    See [bots and integrations](/help/bots-and-integrations) for more information about
+    the various fields.
+    Nearly all third-party integrations should use **Incoming webhook**
+    as the **bot type**.
 
-## Add an integration
+{end_tabs}
 
-The [Integrations page](/integrations) offers a complete list of all the
-integrations currently supported by Zulip. To add an integration to your
-organization, select the integration that you would like to use from the list
-and follow the installation instructions accordingly.
+Depending on the type of bot you're creating, you may need to download its
+`.zuliprc` configuration file. For that, click the **download**
+(<i class="fa fa-download"></i>) icon under the bot's name.

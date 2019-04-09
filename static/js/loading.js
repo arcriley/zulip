@@ -29,7 +29,7 @@ exports.make_indicator = function (outer_container, opts) {
     }
 
     var spinner_elem = $('<div class="loading_indicator_spinner"></div>');
-    spinner_elem.html(templates.render("loader"));
+    spinner_elem.html(templates.render("loader", { container_id: outer_container.attr("id") }));
     container.append(spinner_elem);
     var text_width = 0;
 
@@ -46,7 +46,7 @@ exports.make_indicator = function (outer_container, opts) {
     // These width calculations are tied to the spinner width and
     // margins defined via CSS
     container.css({width: 38 + text_width,
-                   height: 38});
+                   height: 0});
 
     outer_container.data("destroying", false);
 };
@@ -72,3 +72,4 @@ return exports;
 if (typeof module !== 'undefined') {
     module.exports = loading;
 }
+window.loading = loading;

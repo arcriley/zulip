@@ -2,12 +2,6 @@ var stream_events = (function () {
 
 var exports = {};
 
-function get_color() {
-    var used_colors = stream_data.get_colors();
-    var color = stream_color.pick_color(used_colors);
-    return color;
-}
-
 function update_stream_desktop_notifications(sub, value) {
     var desktop_notifications_checkbox = $(".subscription_settings[data-stream-id='" + sub.stream_id + "'] #sub_desktop_notifications_setting .sub_setting_control");
     desktop_notifications_checkbox.prop('checked', value);
@@ -20,19 +14,31 @@ function update_stream_audible_notifications(sub, value) {
     sub.audible_notifications = value;
 }
 
+function update_stream_push_notifications(sub, value) {
+    var push_notifications_checkbox = $(".subscription_settings[data-stream-id='" + sub.stream_id + "'] #sub_push_notifications_setting .sub_setting_control");
+    push_notifications_checkbox.prop('checked', value);
+    sub.push_notifications = value;
+}
+
+function update_stream_email_notifications(sub, value) {
+    var email_notifications_checkbox = $(".subscription_settings[data-stream-id='" + sub.stream_id + "'] #sub_email_notifications_setting .sub_setting_control");
+    email_notifications_checkbox.prop('checked', value);
+    sub.email_notifications = value;
+}
+
 function update_stream_pin(sub, value) {
     var pin_checkbox = $('#pinstream-' + sub.stream_id);
     pin_checkbox.prop('checked', value);
     sub.pin_to_top = value;
 }
 
-exports.update_property = function (stream_id, property, value) {
+exports.update_property = function (stream_id, property, value, rendered_description) {
     var sub = stream_data.get_sub_by_id(stream_id);
     if (sub === undefined) {
         // This isn't a stream we know about, so ignore it.
         blueslip.warn("Update for an unknown subscription", {stream_id: stream_id,
-                                                            property: property,
-                                                            value: value});
+                                                             property: property,
+                                                             value: value});
         return;
     }
 
@@ -49,11 +55,17 @@ exports.update_property = function (stream_id, property, value) {
     case 'audible_notifications':
         update_stream_audible_notifications(sub, value);
         break;
+    case 'push_notifications':
+        update_stream_push_notifications(sub, value);
+        break;
+    case 'email_notifications':
+        update_stream_email_notifications(sub, value);
+        break;
     case 'name':
         subs.update_stream_name(sub, value);
         break;
     case 'description':
-        subs.update_stream_description(sub, value);
+        subs.update_stream_description(sub, value, rendered_description);
         break;
     case 'email_address':
         sub.email_address = value;
@@ -82,22 +94,26 @@ exports.mark_subscribed = function (sub, subscribers, color) {
     }
 
     // If the backend sent us a color, use that
-    if (color !== undefined) {
+    if (color !== undefined && sub.color !== color) {
         sub.color = color;
+        stream_color.update_stream_color(sub, color, {update_historical: true});
     } else if (sub.color === undefined) {
         // If the backend didn't, and we have a color already, send
         // the backend that color.  It's not clear this code path is
         // needed.
         blueslip.warn("Frontend needed to pick a color in mark_subscribed");
-        color = get_color();
+        color = color_data.pick_color();
         subs.set_color(sub.stream_id, color);
     }
     stream_data.subscribe_myself(sub);
     if (subscribers) {
-        stream_data.set_subscriber_emails(sub, subscribers);
+        stream_data.set_subscribers(sub, subscribers);
     }
+    stream_data.update_calculated_fields(sub);
 
-    subs.update_settings_for_subscribed(sub);
+    if (overlays.streams_open()) {
+        subs.update_settings_for_subscribed(sub);
+    }
 
     if (narrow_state.is_for_stream_id(sub.stream_id)) {
         current_msg_list.update_trailing_bookend();
@@ -116,9 +132,10 @@ exports.mark_unsubscribed = function (sub) {
         return;
     } else if (sub.subscribed) {
         stream_data.unsubscribe_myself(sub);
-
-        subs.update_settings_for_unsubscribed(sub);
-
+        stream_data.update_calculated_fields(sub);
+        if (overlays.streams_open()) {
+            subs.update_settings_for_unsubscribed(sub);
+        }
     } else {
         // Already unsubscribed
         return;
@@ -131,6 +148,17 @@ exports.mark_unsubscribed = function (sub) {
     $(document).trigger($.Event('subscription_remove_done.zulip', {sub: sub}));
 };
 
+exports.remove_deactivated_user_from_all_streams = function (user_id) {
+    var all_subs = stream_data.get_unsorted_subs();
+
+    _.each(all_subs, function (sub) {
+        if (stream_data.is_user_subscribed(sub.name, user_id)) {
+            stream_data.remove_subscriber(sub.name, user_id);
+            subs.rerender_subscriptions_settings(sub);
+        }
+    });
+};
+
 
 return exports;
 
@@ -138,3 +166,4 @@ return exports;
 if (typeof module !== 'undefined') {
     module.exports = stream_events;
 }
+window.stream_events = stream_events;

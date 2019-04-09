@@ -14,10 +14,9 @@ framework.
 
 """
 import os
-from os.path import dirname, abspath
 import sys
 
-BASE_DIR = dirname(dirname(abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 import scripts.lib.setup_path_on_import
 
@@ -29,6 +28,7 @@ django.setup()  # We need to call setup to load applications.
 # need to import zerver.models first before the middleware tries to import it.
 
 import zerver.models
+zerver.models
 
 # This application object is used by any WSGI server configured to use this
 # file. This includes Django's development server, if the WSGI_APPLICATION

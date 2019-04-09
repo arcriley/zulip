@@ -1,21 +1,32 @@
-# This is used by ReadTheDocs to install dependencies, so it's
-# valuable to keep this file as just the dependencies for our
-# documentation.
-
-# Needed to build RTD docs
-sphinx==1.5.5
-sphinx-rtd-theme==0.2.4
-
-# Needed to build markdown docs
+#
+# This file is GENERATED.  Don't edit directly.
+#
+# To update, edit the non-"lock" files in requirements/*.txt, then:
+#
+#    tools/update-locked-requirements
+#
+# For details, see requirements/README.md .
+#
+alabaster==0.7.12
+babel==2.5.3
+certifi==2018.11.29       # via requests
+chardet==3.0.4            # via requests
+commonmark==0.5.4
+docutils==0.14
+idna==2.8                 # via requests
+imagesize==1.1.0
+jinja2==2.10              # via sphinx
+markupsafe==1.1.1         # via jinja2
+packaging==19.0           # via sphinx
+pygments==2.3.1           # via sphinx
+pyparsing==2.3.1          # via packaging
+pytz==2018.9              # via babel
 recommonmark==0.4.0
-
-# Dependencies of Sphinx
-alabaster==0.7.10
-babel==2.4.0
-# Upgrading to the latest version of CommonMark breaks the
-# compatibility with recommonmark.  See
-# https://github.com/rtfd/recommonmark/issues/24
-CommonMark==0.5.4
-docutils==0.13.1
-imagesize==0.7.1
+requests==2.21.0          # via sphinx
+six==1.12.0               # via packaging, sphinx
 snowballstemmer==1.2.1
+sphinx-rtd-theme==0.4.3
+sphinx==1.8.4
+sphinxcontrib-websupport==1.1.0  # via sphinx
+typing==3.6.6
+urllib3==1.24.1           # via requests

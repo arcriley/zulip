@@ -1,13 +1,11 @@
-from __future__ import absolute_import
 import re
-import logging
-import traceback
-from typing import Any, Optional, Text
+from typing import Any, Optional, Dict
 from typing.re import Match
 import requests
-from zerver.lib.cache import cache_with_key, get_cache_with_key
+from zerver.lib.cache import cache_with_key, get_cache_with_key, preview_url_cache_key
 from zerver.lib.url_preview.oembed import get_oembed_data
 from zerver.lib.url_preview.parsers import OpenGraphParser, GenericParser
+from django.utils.encoding import smart_text
 
 
 CACHE_NAME = "database"
@@ -20,19 +18,14 @@ link_regex = re.compile(
     r'(?:/?|[/?]\S+)$', re.IGNORECASE)
 
 
-def is_link(url):
-    # type: (Text) -> Match[Text]
-    return link_regex.match(str(url))
+def is_link(url: str) -> Match[str]:
+    return link_regex.match(smart_text(url))
 
 
-def cache_key_func(url):
-    # type: (Text) -> Text
-    return url
-
-
-@cache_with_key(cache_key_func, cache_name=CACHE_NAME, with_statsd_key="urlpreview_data")
-def get_link_embed_data(url, maxwidth=640, maxheight=480):
-    # type: (Text, Optional[int], Optional[int]) -> Any
+@cache_with_key(preview_url_cache_key, cache_name=CACHE_NAME, with_statsd_key="urlpreview_data")
+def get_link_embed_data(url: str,
+                        maxwidth: Optional[int]=640,
+                        maxheight: Optional[int]=480) -> Optional[Dict[str, Any]]:
     if not is_link(url):
         return None
     # Fetch information from URL.
@@ -43,8 +36,9 @@ def get_link_embed_data(url, maxwidth=640, maxheight=480):
     try:
         data = get_oembed_data(url, maxwidth=maxwidth, maxheight=maxheight)
     except requests.exceptions.RequestException:
-        msg = 'Unable to fetch information from url {0}, traceback: {1}'
-        logging.error(msg.format(url, traceback.format_exc()))
+        # This is what happens if the target URL cannot be fetched; in
+        # that case, there's nothing to do here, and this URL has no
+        # open graph data.
         return None
     data = data or {}
     response = requests.get(url)
@@ -59,7 +53,6 @@ def get_link_embed_data(url, maxwidth=640, maxheight=480):
     return data
 
 
-@get_cache_with_key(cache_key_func, cache_name=CACHE_NAME)
-def link_embed_data_from_cache(url, maxwidth=640, maxheight=480):
-    # type: (Text, Optional[int], Optional[int]) -> Any
+@get_cache_with_key(preview_url_cache_key, cache_name=CACHE_NAME)
+def link_embed_data_from_cache(url: str, maxwidth: Optional[int]=640, maxheight: Optional[int]=480) -> Any:
     return

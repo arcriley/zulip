@@ -6,7 +6,7 @@ var ls = {
         try {
             return JSON.parse(str);
         } catch (err) {
-            return undefined;
+            return;
         }
     },
 
@@ -182,3 +182,4 @@ return exports;
 if (typeof module !== 'undefined') {
     module.exports = localstorage;
 }
+window.localstorage = localstorage;
